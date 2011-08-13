@@ -1,0 +1,184 @@
+not exactly commit 78df9821ec0a2de0fee9b57cc58b66d3a79b6af4
+Author: Mark Wielaard <mjw@redhat.com>
+Date:   Thu Jun 3 11:26:17 2010 +0200
+
+    Guard uprobes using tests with uprobes_p.
+    
+    PR11722 user_long(uaddr) should fetch a user space long (in case of 32-on-64).
+    
+    user_long[_warn](uaddr) would fetch a kernel long, but that might be the
+    wrong size if the user space process was running in compat mode (32-on-64).
+    
+    * tapset/conversions.stp (user_long): Fetch a compat_long_t if current
+      process is_compat_task().
+      (user_long_warn): Likewise.
+
+diff --git a/tapset/conversions.stp b/tapset/conversions.stp
+index 3bbbb72..1190b6d 100644
+--- a/tapset/conversions.stp
++++ b/tapset/conversions.stp
+@@ -7,6 +7,12 @@
+ // Public License (GPL); either version 2, or (at your option) any
+ // later version.
+ 
++%{
++#ifdef CONFIG_COMPAT
++#include <linux/compat.h>
++#endif
++%}
++
+ /**
+  * sfunction kernel_string - Retrieves string from kernel memory.
+  * @addr: The kernel address to retrieve the string from.
+@@ -352,15 +358,37 @@ fault:
+  * @addr: The user space address to retrieve the long from.
+  *
+  * Description: Returns the long value from a given user space address.
+- * Returns zero when user space data is not accessible.
++ * Returns zero when user space data is not accessible. Note that the
++ * size of the long depends on the architecture of the current user space
++ * task (for those architectures that support both 64/32 bit compat tasks).
+  */
+ function user_long:long (addr:long) %{ /* pure */ /* unprivileged */
++	size_t l_size = sizeof(long);
++
+         assert_is_myproc();
+-	if (!access_ok(VERIFY_READ, (long *) (intptr_t) THIS->addr, sizeof(long)))
++
++#ifdef CONFIG_COMPAT
++	if (is_compat_task())
++		l_size = sizeof(compat_long_t);
++#endif
++
++	if (!access_ok(VERIFY_READ, (long *) (intptr_t) THIS->addr, l_size))
++		goto fault;
++	if (l_size == sizeof(long)) {
++		if (__stp_get_user(THIS->__retvalue, (long *) (intptr_t) THIS->addr))
+ 		goto fault;
+-	if (__stp_get_user(THIS->__retvalue, (long *) (intptr_t) THIS->addr)) {
++#ifdef CONFIG_COMPAT
++	} else {
++		if (__stp_get_user(THIS->__retvalue, (compat_long_t *) (intptr_t) THIS->addr)) {
++
++			goto fault;
++		}
++#endif
++	}
++
++	if (0) {
+ fault:
+-		THIS->__retvalue = 0;
++			THIS->__retvalue = 0;
+ 	}
+ %}
+ 
+@@ -370,13 +398,36 @@ fault:
+  *
+  * Description: Returns the long value from a given user space address.
+  * Returns zero when user space and warns (but does not abort) about the
+- * failure.
++ * failure. Note that the size of the long depends on the architecture
++ * of the current user space task (for those architectures that support
++ * both 64/32 bit compat tasks).
+  */
+ function user_long_warn:long (addr:long) %{ /* pure */ /* unprivileged */
++	size_t l_size = sizeof(long);
++
+         assert_is_myproc();
+-	if (!access_ok(VERIFY_READ, (long *) (intptr_t) THIS->addr, sizeof(long)))
++
++#ifdef CONFIG_COMPAT
++	if (is_compat_task())
++		l_size = sizeof(compat_long_t);
++#endif
++
++	if (!access_ok(VERIFY_READ, (long *) (intptr_t) THIS->addr, l_size))
+ 		goto fault;
+-	if (__stp_get_user(THIS->__retvalue, (long *) (intptr_t) THIS->addr)) {
++	if (l_size == sizeof(long)) {
++		if (__stp_get_user(THIS->__retvalue, (long *) (intptr_t) THIS->addr)) {
++			goto fault;
++		}
++#ifdef CONFIG_COMPAT
++	} else {
++		if (__stp_get_user(THIS->__retvalue, (compat_long_t *) (intptr_t) THIS->addr)) {
++
++			goto fault;
++		}
++#endif
++	}
++
++	if (0) {
+ fault:
+ 		snprintf (CONTEXT->error_buffer, sizeof(CONTEXT->error_buffer),
+ 				"user long copy fault %p", (void *) (uintptr_t) THIS->addr);
+diff --git a/testsuite/systemtap.base/externalvar.exp b/testsuite/systemtap.base/externalvar.exp
+index f6553f4..40dc455 100644
+--- a/testsuite/systemtap.base/externalvar.exp
++++ b/testsuite/systemtap.base/externalvar.exp
+@@ -13,6 +13,7 @@ set maintestflags "$testflags additional_flags=-L$testlibdir additional_flags=-l
+ # Only run on make installcheck and utrace present.
+ if {! [installtest_p]} { untested "$test"; return }
+ if {! [utrace_p]} { untested "$test"; return }
++if {! [uprobes_p]} { untested "$test"; return }
+ 
+ # Compile our test program and library.
+ set res [target_compile $testsrclib $testso executable $testlibflags]
+diff --git a/testsuite/systemtap.base/sdt.exp b/testsuite/systemtap.base/sdt.exp
+index 26ed15c..59aa4fd 100644
+--- a/testsuite/systemtap.base/sdt.exp
++++ b/testsuite/systemtap.base/sdt.exp
+@@ -44,7 +44,7 @@ if { $res != "" } {
+     pass "compiling $test.c $extra_flag $pbtype_mssg"
+ }
+ 
+-if {[installtest_p] && [utrace_p]} {
++if {[installtest_p] && [utrace_p] && [uprobes_p]} {
+   stap_run3 "$test $extra_flag $pbtype_mssg" $srcdir/$subdir/$test.stp $testprog -c ./$testprog
+ } else {
+   untested "$test $extra_flag $pbtype_mssg"
+@@ -70,7 +70,7 @@ if { $res != "" } {
+     pass "compiling $test.c c++ $extra_flag $pbtype_mssg"
+ }
+ 
+-if {[installtest_p] && [utrace_p]} {
++if {[installtest_p] && [utrace_p] && [uprobes_p]} {
+   stap_run3 "$test c++ $extra_flag $pbtype_mssg" $srcdir/$subdir/$test.stp $testprog -c ./$testprog
+ } else {
+   untested "$test c++ $extra_flag $pbtype_mssg $pbtype_mssg"
+diff --git a/testsuite/systemtap.base/sdt_misc.exp b/testsuite/systemtap.base/sdt_misc.exp
+index a7ebf21..c10d4ac 100644
+--- a/testsuite/systemtap.base/sdt_misc.exp
++++ b/testsuite/systemtap.base/sdt_misc.exp
+@@ -221,6 +221,7 @@ if { $res != "" } {
+ }
+ 
+ if {![installtest_p]} {untested $test; return}
++if {![uprobes_p]} {untested $test; return}
+ if {![utrace_p]} {
+     untested "$test"
+     if { $verbose == 0 } {
+diff --git a/testsuite/systemtap.context/fib.exp b/testsuite/systemtap.context/fib.exp
+index 5026e5d..bc84481 100644
+--- a/testsuite/systemtap.context/fib.exp
++++ b/testsuite/systemtap.context/fib.exp
+@@ -6,6 +6,7 @@ set test "fib"
+ # Only run on make installcheck and utrace present.
+ if {! [installtest_p]} { untested "$test"; return }
+ if {! [utrace_p]} { untested "$test"; return }
++if {! [uprobes_p]} { untested "$test"; return }
+ 
+ set testpath  "$srcdir/$subdir"
+ set testsrc   "$testpath/fib.c"
+diff --git a/testsuite/systemtap.context/usymbols.exp b/testsuite/systemtap.context/usymbols.exp
+index 39b3b44..57c85bb 100644
+--- a/testsuite/systemtap.context/usymbols.exp
++++ b/testsuite/systemtap.context/usymbols.exp
+@@ -13,6 +13,7 @@ set maintestflags "$testflags additional_flags=-L$testlibdir additional_flags=-l
+ # Only run on make installcheck and utrace present.
+ if {! [installtest_p]} { untested "$test"; return }
+ if {! [utrace_p]} { untested "$test"; return }
++if {! [uprobes_p]} { untested "$test"; return }
+ 
+ # Compile our test program and library.
+ set res [target_compile $testsrclib $testso executable $testlibflags]

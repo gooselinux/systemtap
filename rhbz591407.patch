@@ -1,0 +1,81 @@
+commit 81b07590d1c5c43e26ecb416adfdf97bab9b7ae4
+Author: Mark Wielaard <mjw@redhat.com>
+Date:   Wed May 12 14:16:26 2010 +0200
+
+    PR11590 Revert "PR6954: make ++/-- operation trigger automatic global printing"
+    
+    This reverts commit 982b88bd950381434a8325e550eff9df59f59dcd.
+    
+    Pretending that pre/postfix ++/-- operations only writes to its argument
+    messes up the optimization of a variable that is assigned and then
+    only used through post/prefix ++/--operators.
+
+diff --git a/staptree.cxx b/staptree.cxx
+index cca7998..5c6aae6 100644
+--- a/staptree.cxx
++++ b/staptree.cxx
+@@ -1991,21 +1991,19 @@ varuse_collecting_visitor::visit_arrayindex (arrayindex *e)
+ void
+ varuse_collecting_visitor::visit_pre_crement (pre_crement *e)
+ {
+-  // PR6954: regard as pure writes
+-  expression* last_lvalue = current_lvalue;
+-  current_lvalue = e->operand; // leave a mark for ::visit_symbol
++  expression* last_lrvalue = current_lrvalue;
++  current_lrvalue = e->operand; // leave a mark for ::visit_symbol
+   functioncall_traversing_visitor::visit_pre_crement (e);
+-  current_lvalue = last_lvalue;
++  current_lrvalue = last_lrvalue;
+ }
+ 
+ void
+ varuse_collecting_visitor::visit_post_crement (post_crement *e)
+ {
+-  // PR6954: regard as pure writes
+-  expression* last_lvalue = current_lvalue;
+-  current_lvalue = e->operand; // leave a mark for ::visit_symbol
++  expression* last_lrvalue = current_lrvalue;
++  current_lrvalue = e->operand; // leave a mark for ::visit_symbol
+   functioncall_traversing_visitor::visit_post_crement (e);
+-  current_lvalue = last_lvalue;
++  current_lrvalue = last_lrvalue;
+ }
+ 
+ void
+diff --git a/testsuite/systemtap.base/global_end.exp b/testsuite/systemtap.base/global_end.exp
+index 9d9c8d9..d245212 100644
+--- a/testsuite/systemtap.base/global_end.exp
++++ b/testsuite/systemtap.base/global_end.exp
+@@ -19,7 +19,6 @@ expect {
+     -re {epsilon."one",1. @count=0x4 @min=0x1 @max=0x4 @sum=0xa @avg=0x2} { incr ok; exp_continue }
+     -re {epsilon."two",2. @count=0x4 @min=0xa @max=0x28 @sum=0x64 @avg=0x19} { incr ok; exp_continue }
+     -re {phi @count=0x4 @min=0x1 @max=0x4 @sum=0xa @avg=0x2} { incr ok; exp_continue }
+-    -re {var=0x1} { incr ok; exp_continue }
+     timeout { fail "$test (timeout)" }
+     eof { }
+ }
+@@ -33,4 +32,4 @@ expect {
+     -re {Avg time = [1-9]} { incr ok; exp_continue }
+ }
+ 
+-if {$ok == 13} { pass "$test ($ok)" } { fail "$test ($ok)" }
++if {$ok == 12} { pass "$test ($ok)" } { fail "$test ($ok)" }
+diff --git a/testsuite/systemtap.base/global_end.stp b/testsuite/systemtap.base/global_end.stp
+index 1f707d5..4a5baff 100644
+--- a/testsuite/systemtap.base/global_end.stp
++++ b/testsuite/systemtap.base/global_end.stp
+@@ -1,4 +1,4 @@
+-global alpha, beta, gamma, iota, epsilon, phi, var
++global alpha, beta, gamma, iota, epsilon, phi
+ 
+ probe begin {
+  gamma = "abcdefghijklmnopqrstuvwxyz"
+@@ -29,8 +29,6 @@ probe begin {
+  epsilon["two",2] <<< 20
+  epsilon["two",2] <<< 30
+  epsilon["two",2] <<< 40
+-
+- var++
+ }
+ 
+ probe timer.ms(100) {

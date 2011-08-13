@@ -1,0 +1,80 @@
+commit a306dd9c5bd63cba37121c53191034d6399ee020
+Author: Mark Wielaard <mjw@redhat.com>
+Date:   Fri Jun 4 11:34:23 2010 +0200
+
+    Add configure check for xmlto pdf with chapters titles starting with L...
+    
+    There is a strange bug in older versions of xmlto when generating pdf.
+    https://bugzilla.redhat.com/show_bug.cgi?id=526273
+    So make sure to have a chapter title starting with L plus an refentry.
+    This will make sure the xmlto pdf support test fails on buggy versions.
+    
+    configure.ac: Extend conftest.xml.
+    configure: Regenerated.
+
+diff --git a/configure b/configure
+index 4b033e3..3c84520 100755
+--- a/configure
++++ b/configure
+@@ -6919,7 +6919,11 @@ cat > conftest.xml << 'EOF'
+ "http://www.oasis-open.org/docbook/xml/4.1.2/docbookx.dtd" >
+    <book lang="en">
+    <bookinfo><title>foo</title></bookinfo>
+-   <chapter><title>bar</title><para>baz</para></chapter>
++   <chapter id="logging.stp"><title>Logging Tapset</title>
++   <refentry id="API-log"><refnamediv><refname>log</refname>
++   <refpurpose>logging</refpurpose></refnamediv>
++   <refsect1><title>Description</title>
++   <para>baz</para></refsect1></refentry></chapter>
+    </book>
+ EOF
+ 
+@@ -6962,7 +6966,7 @@ $as_echo "$as_me: WARNING: Not building reference documentation in PDF format" >
+    fi
+    rm -f conftest.pdf
+ fi
+- if test "maybe later" == "yes"; then
++ if test "$have_xmlto_pdf" == "yes"; then
+   BUILD_PDFREFDOCS_TRUE=
+   BUILD_PDFREFDOCS_FALSE='#'
+ else
+diff --git a/configure.ac b/configure.ac
+index 1356d56..0306c72 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -237,13 +237,21 @@ if test "x${have_xmlto}" == "xyes" -a "$enable_refdocs" != "no" -a "${building_d
+ fi
+ AM_CONDITIONAL([BUILD_REFDOCS], [test "$building_refdocs" == "yes"])
+ 
++dnl There is a strange bug in older versions of xmlto when generating pdf.
++dnl https://bugzilla.redhat.com/show_bug.cgi?id=526273
++dnl So make sure to have a chapter title starting with L plus an refentry.
++dnl This will make sure the xmlto pdf support test fails on buggy versions.
+ cat > conftest.xml << 'EOF'
+ <?xml version="1.0" encoding="UTF-8"?>
+ <!DOCTYPE book PUBLIC "-//OASIS//DTD DocBook XML V4.1.2//EN"
+ "http://www.oasis-open.org/docbook/xml/4.1.2/docbookx.dtd" []>
+    <book lang="en">
+    <bookinfo><title>foo</title></bookinfo>
+-   <chapter><title>bar</title><para>baz</para></chapter>
++   <chapter id="logging.stp"><title>Logging Tapset</title>
++   <refentry id="API-log"><refnamediv><refname>log</refname>
++   <refpurpose>logging</refpurpose></refnamediv>
++   <refsect1><title>Description</title>
++   <para>baz</para></refsect1></refentry></chapter>
+    </book>
+ EOF
+ 
+@@ -272,11 +280,7 @@ AC_MSG_CHECKING([for xmlto pdf support])
+    fi
+    rm -f conftest.pdf
+ fi
+-dnl Unfortunately https://bugzilla.redhat.com/show_bug.cgi?id=526273 
+-dnl blocks "xmlto pdf" on our docs (but not on the above test).
+-dnl So we need to disable this anyway.
+-dnl AM_CONDITIONAL([BUILD_PDFREFDOCS], [test "$have_xmlto_pdf" == "yes"])
+-AM_CONDITIONAL([BUILD_PDFREFDOCS], [test "maybe later" == "yes"])
++AM_CONDITIONAL([BUILD_PDFREFDOCS], [test "$have_xmlto_pdf" == "yes"])
+ 
+ rm -f conftest.xml
+ 

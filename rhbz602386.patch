@@ -1,0 +1,132 @@
+commit 9e5c67f00d1e44699d12533a3db91b98b0ae7e2a
+Author: Mark Wielaard <mjw@redhat.com>
+Date:   Wed Jun 9 11:50:48 2010 +0200
+
+    Loop on utrace_barrier if utrace_control UTRACE_DETACH returns -EINPROGRESS.
+    
+    When utrace_control(tsk, eng, UTRACE_DETACH) returns -EINPROGRESS that
+    means there are still handlers running. So loop on utrace_barrier(tsk, eng)
+    in that case, till it no longer returns -ERESTARTSYS. That makes sure that
+    no engine handler will be called afterwards, so we can safely unload the
+    stap module. Not doing this might have caused PR11672
+    (utrace_report_syscall_exit crash), although we don't yet have a simple
+    reproducer for that issue.
+    
+    * runtime/itrace.c (remove_usr_itrace_info): Loop on utrace_barrier if
+      utrace_control returned -EINPROGRESS.
+    * runtime/task_finder.c (stap_utrace_detach): Likewise.
+      (stap_utrace_detach_ops): Likewise. And warn if stap_utrace_detach
+      didn't return successfully.
+      (__stp_utrace_attach): Loop on -ERESTARTSYS after utrace_barrier.
+      (__stp_utrace_task_finder_target_quiesce): Likewise.
+    
+    Add more error messages when something goes wrong during task_finder detach.
+    
+    * runtime/task_finder.c (stap_utrace_detach): Report when utrace_barrier
+      fails.
+      (stap_utrace_detach_ops): Report how stap_utrace_detach failed.
+
+diff --git a/runtime/itrace.c b/runtime/itrace.c
+index 399bfde..5f701b9 100644
+--- a/runtime/itrace.c
++++ b/runtime/itrace.c
+@@ -356,6 +356,11 @@ void static remove_usr_itrace_info(struct itrace_info *ui)
+ 
+ 	if (ui->tsk && ui->engine) {
+ 		status = utrace_control(ui->tsk, ui->engine, UTRACE_DETACH);
++		if (status == -EINPROGRESS) {
++			do {
++				status = utrace_barrier(ui->tsk, ui->engine);
++			} while (status == -ERESTARTSYS);
++		}
+ 		if (status < 0 && status != -ESRCH && status != -EALREADY)
+ 			printk(KERN_ERR
+ 			       "utrace_control(UTRACE_DETACH) returns %d\n",
+diff --git a/runtime/task_finder.c b/runtime/task_finder.c
+index 171d6e2..be55e97 100644
+--- a/runtime/task_finder.c
++++ b/runtime/task_finder.c
+@@ -306,8 +306,15 @@ stap_utrace_detach(struct task_struct *tsk,
+ 			rc = 0;	    /* ignore these errors */
+ 			break;
+ 		case -EINPROGRESS:
+-			debug_task_finder_detach();
+-			rc = 0;
++			do {
++				rc = utrace_barrier(tsk, engine);
++			} while (rc == -ERESTARTSYS);
++			if (rc == 0) {
++				debug_task_finder_detach();
++			} else {
++				rc = -rc;
++				_stp_error("utrace_barrier returned error %d on pid %d", rc, tsk->pid);
++			}
+ 			break;
+ 		default:
+ 			rc = -rc;
+@@ -326,6 +333,7 @@ stap_utrace_detach_ops(struct utrace_engine_ops *ops)
+ 	struct task_struct *grp, *tsk;
+ 	struct utrace_attached_engine *engine;
+ 	pid_t pid = 0;
++	int rc = 0;
+ 
+ 	// Notice we're not calling get_task_mm() in this loop. In
+ 	// every other instance when calling do_each_thread, we avoid
+@@ -353,8 +361,12 @@ stap_utrace_detach_ops(struct utrace_engine_ops *ops)
+ 		/* Notice we're purposefully ignoring errors from
+ 		 * stap_utrace_detach().  Even if we got an error on
+ 		 * this task, we need to keep detaching from other
+-		 * tasks. */
+-		(void) stap_utrace_detach(tsk, ops);
++		 * tasks.  But warn, we might be unloading and dangling
++		 * engines are bad news. */
++		rc = stap_utrace_detach(tsk, ops);
++		if (rc != 0)
++			_stp_error("stap_utrace_detach returned error %d on pid %d", rc, tsk->pid);
++		WARN_ON(rc != 0);
+ 	} while_each_thread(grp, tsk);
+ 	rcu_read_unlock();
+ 	debug_task_finder_report();
+@@ -503,7 +515,9 @@ __stp_utrace_attach(struct task_struct *tsk,
+ 			 * stale task pointer, if we have an engine
+ 			 * ref.
+ 			 */
+-			rc = utrace_barrier(tsk, engine);
++			do {
++				rc = utrace_barrier(tsk, engine);
++			} while (rc == -ERESTARTSYS);
+ 			if (rc != 0 && rc != -ESRCH && rc != -EALREADY)
+ 				_stp_error("utrace_barrier returned error %d on pid %d",
+ 					   rc, (int)tsk->pid);
+@@ -513,13 +527,15 @@ __stp_utrace_attach(struct task_struct *tsk,
+ 
+ 			if (action != UTRACE_RESUME) {
+ 				rc = utrace_control(tsk, engine, UTRACE_STOP);
+-				/* EINPROGRESS means we must wait for
+-				 * a callback, which is what we want. */
+-				if (rc != 0 && rc != -EINPROGRESS)
++				if (rc == -EINPROGRESS)
++					/* EINPROGRESS means we must wait for
++					 * a callback, which is what we want. */
++					do {
++						rc = utrace_barrier(tsk, engine);
++					} while (rc == -ERESTARTSYS);
++				if (rc != 0)
+ 					_stp_error("utrace_control returned error %d on pid %d",
+ 						   rc, (int)tsk->pid);
+-				else
+-					rc = 0;
+ 			}
+ 
+ 		}
+@@ -1241,7 +1257,9 @@ __stp_utrace_task_finder_target_quiesce(enum utrace_resume_action action,
+ 		 * safe to call utrace_barrier() even with
+ 		 * a stale task pointer, if we have an engine ref.
+ 		 */
+-		rc = utrace_barrier(tsk, engine);
++		do {
++			rc = utrace_barrier(tsk, engine);
++		} while (rc == -ERESTARTSYS);
+ 		if (rc == 0)
+ 			rc = utrace_set_events(tsk, engine,
+ 					       __STP_ATTACHED_TASK_BASE_EVENTS(tgt));

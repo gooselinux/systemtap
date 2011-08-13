@@ -1,0 +1,23 @@
+commit c3ed551be916af35ef72f6cb93f584423da3dede
+Author: Mark Wielaard <mjw@redhat.com>
+Date:   Sun Jun 27 14:22:55 2010 +0200
+
+    Don't panic on utrace_barrier failures because process already ended.
+    
+    * runtime/task_finder.c (stap_utrace_detach): When utrace_barrier returns
+      -ESRCH or -EALREADY treat it as success.
+
+diff --git a/runtime/task_finder.c b/runtime/task_finder.c
+index be55e97..ea1e458 100644
+--- a/runtime/task_finder.c
++++ b/runtime/task_finder.c
+@@ -309,7 +309,8 @@ stap_utrace_detach(struct task_struct *tsk,
+ 			do {
+ 				rc = utrace_barrier(tsk, engine);
+ 			} while (rc == -ERESTARTSYS);
+-			if (rc == 0) {
++			if (rc == 0 || rc == -ESRCH || rc == -EALREADY) {
++				rc = 0;
+ 				debug_task_finder_detach();
+ 			} else {
+ 				rc = -rc;

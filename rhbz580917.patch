@@ -1,0 +1,104 @@
+commit 521c6939ff938f75e8b6db265835af3c4fc72011
+Author: Josh Stone <jistone@redhat.com>
+Date:   Fri Jun 11 18:22:56 2010 -0700
+
+    PR11698: Track aliases even with ppc function descriptors
+    
+    We can include function descriptors in the symbol table, and just make
+    sure that we don't try to probe them with query_module_symtab.  This
+    lets update_symtab do its thing resolving aliased names.
+    
+    * dwflpp.h (func_info): Add a descriptor flag.
+    * tapsets.cxx (symbol_table::add_symbol): Set the descriptor flag.
+      (symbol_table::read_symbols): Not descriptors.
+      (symbol_table::get_from_elf): Functions from powerpc rejected sections
+      are function descriptors.
+      (dwarf_query::query_module_symtab): Don't probe descriptors.
+
+diff --git a/dwflpp.h b/dwflpp.h
+index 523dd88..6ba8855 100644
+--- a/dwflpp.h
++++ b/dwflpp.h
+@@ -124,7 +124,7 @@ module_cache
+ struct func_info
+ {
+   func_info()
+-    : decl_file(NULL), decl_line(-1), addr(0), prologue_end(0), weak(false)
++    : decl_file(NULL), decl_line(-1), addr(0), prologue_end(0), weak(false), descriptor(false)
+   {
+     std::memset(&die, 0, sizeof(die));
+   }
+@@ -135,7 +135,7 @@ struct func_info
+   Dwarf_Addr addr;
+   Dwarf_Addr entrypc;
+   Dwarf_Addr prologue_end;
+-  bool weak;
++  bool weak, descriptor;
+ };
+ 
+ 
+diff --git a/tapsets.cxx b/tapsets.cxx
+index 886c2de..165ccd1 100644
+--- a/tapsets.cxx
++++ b/tapsets.cxx
+@@ -293,8 +293,8 @@ symbol_table
+ #ifdef __powerpc__
+   GElf_Word opd_section;
+ #endif
+-  void add_symbol(const char *name, bool weak, Dwarf_Addr addr,
+-                                               Dwarf_Addr *high_addr);
++  void add_symbol(const char *name, bool weak, bool descriptor,
++                  Dwarf_Addr addr, Dwarf_Addr *high_addr);
+   enum info_status read_symbols(FILE *f, const string& path);
+   enum info_status read_from_elf_file(const string& path,
+ 				      const systemtap_session &sess);
+@@ -835,7 +835,7 @@ dwarf_query::query_module_symtab()
+       else
+         {
+           fi = sym_table->lookup_symbol(function_str_val);
+-          if (fi && null_die(&fi->die))
++          if (fi && !fi->descriptor && null_die(&fi->die))
+             query_func_info(fi->addr, *fi, this);
+         }
+     }
+@@ -4322,8 +4322,8 @@ symbol_table::~symbol_table()
+ }
+ 
+ void
+-symbol_table::add_symbol(const char *name, bool weak, Dwarf_Addr addr,
+-                                                      Dwarf_Addr *high_addr)
++symbol_table::add_symbol(const char *name, bool weak, bool descriptor,
++                         Dwarf_Addr addr, Dwarf_Addr *high_addr)
+ {
+ #ifdef __powerpc__
+   // Map ".sys_foo" to "sys_foo".
+@@ -4334,6 +4334,7 @@ symbol_table::add_symbol(const char *name, bool weak, Dwarf_Addr addr,
+   fi->addr = addr;
+   fi->name = name;
+   fi->weak = weak;
++  fi->descriptor = descriptor;
+   map_by_name[fi->name] = fi;
+   // TODO: Use a multimap in case there are multiple static
+   // functions with the same name?
+@@ -4375,7 +4376,7 @@ symbol_table::read_symbols(FILE *f, const string& path)
+           break;
+         }
+       if (type == 'T' || type == 't' || type == 'W')
+-        add_symbol(name, (type == 'W'), (Dwarf_Addr) addr, &high_addr);
++        add_symbol(name, (type == 'W'), false, (Dwarf_Addr) addr, &high_addr);
+     }
+ 
+   if (map_by_addr.size() < 1)
+@@ -4493,10 +4494,9 @@ symbol_table::get_from_elf()
+       GElf_Sym sym;
+       GElf_Word section;
+       const char *name = dwfl_module_getsym(mod, i, &sym, &section);
+-      if (name && GELF_ST_TYPE(sym.st_info) == STT_FUNC &&
+-                                                   !reject_section(section))
++      if (name && GELF_ST_TYPE(sym.st_info) == STT_FUNC)
+         add_symbol(name, (GELF_ST_BIND(sym.st_info) == STB_WEAK),
+-                                              sym.st_value, &high_addr);
++                   reject_section(section), sym.st_value, &high_addr);
+     }
+   return info_present;
+ }

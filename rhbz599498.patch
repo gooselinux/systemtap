@@ -1,0 +1,56 @@
+commit 05bcdc1d7cd2e3f0f047c749b2555f150a35fe82
+Author: Mark Wielaard <mjw@redhat.com>
+Date:   Thu Jun 3 11:26:17 2010 +0200
+
+    Replace walk_stack field version guard with autoconf test.
+    
+    The test for whether or not to assign print_context_stack to the
+    walk_stack stacktrace_ops field depended on the kernel version.
+    Replace with a proper runtime/autoconf test to make sure the field
+    always gets assigned when available.
+    
+    * buildrun.cxx (compile_pass): Add output for STAP_CONF_WALK_STACK.
+    * runtime/autoconf-walk-stack.c: New test.
+    * runtime/stack.c (print_stack_ops): Assign walk_stack field
+      print_context_stack depending on STAP_CONF_WALK_STACK.
+
+diff --git a/buildrun.cxx b/buildrun.cxx
+index 89fa017..c120a41 100644
+--- a/buildrun.cxx
++++ b/buildrun.cxx
+@@ -193,6 +193,7 @@ compile_pass (systemtap_session& s)
+   output_autoconf(s, o, "autoconf-asm-syscall.c",
+ 		  "STAPCONF_ASM_SYSCALL_H", NULL);
+   output_autoconf(s, o, "autoconf-ring_buffer-flags.c", "STAPCONF_RING_BUFFER_FLAGS", NULL);
++  output_autoconf(s, o, "autoconf-walk-stack.c", "STAPCONF_WALK_STACK", NULL);
+ 
+   o << module_cflags << " += -include $(STAPCONF_HEADER)" << endl;
+ 
+diff --git a/runtime/autoconf-walk-stack.c b/runtime/autoconf-walk-stack.c
+new file mode 100644
+index 0000000..0583d65
+--- /dev/null
++++ b/runtime/autoconf-walk-stack.c
+@@ -0,0 +1,9 @@
++/* Some kernels have an extra stacktrace_ops field walk_stack. */
++#include <linux/sched.h>
++#include <asm/stacktrace.h>
++
++void foo (void)
++{
++  struct stacktrace_ops t;
++  t.walk_stack = print_context_stack;
++}
+diff --git a/runtime/stack.c b/runtime/stack.c
+index 53b0a71..1194bf0 100644
+--- a/runtime/stack.c
++++ b/runtime/stack.c
+@@ -99,7 +99,7 @@ static const struct stacktrace_ops print_stack_ops = {
+ 	.warning_symbol = print_stack_warning_symbol,
+ 	.stack = print_stack_stack,
+ 	.address = print_stack_address,
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,33)
++#if defined(STAPCONF_WALK_STACK)
+ 	.walk_stack = print_context_stack,
+ #endif
+ };

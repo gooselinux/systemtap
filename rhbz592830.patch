@@ -1,0 +1,199 @@
+commit 0a81d94ea5d1c5bb7ef5bb96e63fb77c3cac361e
+Author: David Smith <dsmith@redhat.com>
+Date:   Tue May 18 13:19:23 2010 -0500
+
+    Fixed BZ 592830 by fixing signal.check_ignored.return for newer kernels.
+    
+    * tapset/signal.stp (signal.check_ignored.return): Provide an alternative
+      for newer kernels where the sig_ignored() function has been inlined.
+    * tapset/errno.stp (return_str): New function.
+    * testsuite/buildok/signal-detailed.stp: Made the
+      signal.check_ignored.return test non-optional.
+
+diff --git a/tapset/errno.stp b/tapset/errno.stp
+index d4d571b..c26c113 100644
+--- a/tapset/errno.stp
++++ b/tapset/errno.stp
+@@ -411,3 +411,16 @@ no_ret:
+ 		strlcpy(THIS->__retvalue, "N/A", MAXSTRINGLEN);
+ 	}
+ %}
++
++function return_str:string(format:long, ret:long)
++{
++	if (ret < 0 && errno_p(ret))
++		return sprintf("%d (%s)", ret, errno_str(ret))
++
++	if (format == 2)
++		return sprintf("0x%x", ret)
++	else if (format == 3)
++		return sprintf("%#o", ret)
++	else	
++		return sprintf("%d", ret)
++}
+diff --git a/tapset/signal.stp b/tapset/signal.stp
+index fcc2363..2951e85 100644
+--- a/tapset/signal.stp
++++ b/tapset/signal.stp
+@@ -323,11 +323,28 @@ probe signal.check_ignored = kernel.function("sig_ignored")
+  * signal.checkperm
+  * @retstr: Return value as a string
+  */
+-probe signal.check_ignored.return = kernel.function("sig_ignored").return ?
++
++/* On newer kernels, sig_ignored() is inline, so we can't do a return
++ * probe.  So, instead we'll probe prepare_signal(), which is the only
++ * caller of sig_ignored(). */
++probe __signal.check_ignored.sig_ignored.return =
++	kernel.function("sig_ignored").return
+ {
+-    name = "sig_ignored"
+     retstr = returnstr(1)
+ }
++probe __signal.check_ignored.prepare_signal.return =
++	kernel.function("prepare_signal").return
++{
++    /* The prepare_signal() function inverts the return value of
++     * sig_ignored(). */
++    retstr = return_str(1, !$return)
++}
++probe signal.check_ignored.return =
++	__signal.check_ignored.sig_ignored.return !, 
++	__signal.check_ignored.prepare_signal.return
++{
++    name = "check_ignored"
++}
+ 
+ 
+ // probe signal.handle_stop
+diff --git a/testsuite/buildok/signal-detailed.stp b/testsuite/buildok/signal-detailed.stp
+new file mode 100755
+index 0000000..9cc581e
+--- /dev/null
++++ b/testsuite/buildok/signal-detailed.stp
+@@ -0,0 +1,125 @@
++#! stap -p4
++
++probe signal.send
++{
++	printf("%s(%d(%s), %d(%s))\n", name, sig, sig_name, sig_pid, pid_name)
++	printf("%s %p %p %d %d\n", si_code, task, sinfo, shared, send2queue)
++}
++probe signal.send.return
++{
++	printf("%s() = %s\n", name, retstr)
++	printf("%d %d\n", shared, send2queue)
++}
++
++probe signal.checkperm
++{
++	printf("%s(%d(%s), %d(%s))\n", name, sig, sig_name, sig_pid, pid_name)
++	printf("%s %p %p\n", si_code, task, sinfo)
++}
++probe signal.checkperm.return
++{
++	printf("%s() = %s\n", name, retstr)
++}
++
++probe signal.wakeup
++{
++	printf("%s(%d(%s))\n", name, sig_pid, pid_name)
++	printf("%d %s\n", resume, state_mask)
++}
++
++# signal.check_ignored test moved to signal-check_ignored.stp
++
++probe signal.check_ignored.return
++{
++	printf("%s() = %s\n", name, retstr)
++}
++
++probe signal.force_segv
++{
++	printf("%s(%d(%s), %d(%s))\n", name, sig, sig_name, sig_pid, pid_name)
++}
++probe signal.force_segv.return
++{
++	printf("%s() = %s\n", name, retstr)
++}
++
++probe signal.syskill
++{
++	printf("%s(%d(%s), %d(%s))\n", name, sig, sig_name, sig_pid, pid_name)
++}
++probe signal.syskill.return
++{
++	printf("%s() = %s\n", name, retstr)
++}
++
++probe signal.systkill
++{
++	printf("%s(%d(%s), %d(%s))\n", name, sig, sig_name, sig_pid, pid_name)
++}
++probe signal.systkill.return
++{
++	printf("%s() = %s\n", name, retstr)
++}
++
++probe signal.systgkill
++{
++	printf("%s(%d(%s), %d(%s))\n", name, sig, sig_name, sig_pid, pid_name)
++	printf("%d\n", tgid)
++}
++probe signal.systgkill.return
++{
++	printf("%s() = %s\n", name, retstr)
++}
++
++probe signal.send_sig_queue
++{
++	printf("%s(%d(%s), %d(%s))\n", name, sig, sig_name, sig_pid, pid_name)
++	printf("%d\n", sigqueue_addr)
++}
++probe signal.send_sig_queue.return
++{
++	printf("%s() = %s\n", name, retstr)
++}
++
++probe signal.pending
++{
++	printf("%s(%p %d\n", name, sigset_add, sigset_size)
++}
++probe signal.pending.return
++{
++	printf("%s() = %s\n", name, retstr)
++}
++
++# signal.handle test moved to signal-handle.stp
++
++probe signal.handle.return ?
++{
++	printf("%s() = %s\n", name, retstr)
++}
++
++probe signal.do_action
++{
++	printf("%s(%d(%s)\n", name, sig, sig_name)
++	printf("%p %p\n", sigact_addr, oldsigact_addr)
++	printf("%p %d\n", sa_handler, sa_mask)
++}
++probe signal.do_action.return
++{
++	printf("%s() = %s\n", name, retstr)
++}
++
++probe signal.procmask
++{
++	printf("%s %d\n", name, how)
++	printf("%p %p %d\n", sigset_addr, oldsigset_addr, sigset)
++}
++probe signal.procmask.return
++{
++	printf("%s() = %s\n", name, retstr)
++}
++
++probe signal.flush
++{
++	printf("%s(%d(%s))\n", name, sig_pid, pid_name)
++	printf("%p\n", task)
++}
