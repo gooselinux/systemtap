@@ -21,7 +21,7 @@
 %{!?publican_brand: %global publican_brand RedHat}
 Name: systemtap
 Version: 1.2
-Release: 9%{?dist}
+Release: 11%{?dist}
 # for version, see also configure.ac
 Summary: Instrumentation System
 Group: Development/System
@@ -88,6 +88,7 @@ Patch15: rhbz599430.patch
 # Patch16: rhbz596933.patch
 Patch17: rhbz600254.patch
 Patch18: rhbz608429.patch
+Patch19: rhbz653606,653604.patch
 
 %if %{with_docs}
 BuildRequires: /usr/bin/latex /usr/bin/dvips /usr/bin/ps2pdf latex2html
@@ -239,6 +240,7 @@ cd ..
 # %patch16 -p1
 %patch17 -p1
 %patch18 -p1
+%patch19 -p1
 
 %build
 
@@ -320,10 +322,10 @@ mv $RPM_BUILD_ROOT%{_datadir}/doc/systemtap/examples examples
 # Fix paths in the example & testsuite scripts
 find examples testsuite -type f -name '*.stp' -print0 | xargs -0 sed -i -r -e '1s@^#!.+stap@#!%{_bindir}/stap@'
 
-# Because "make install" may install staprun with mode 04111, the
+# Because "make install" may install staprun with whatever mode, the
 # post-processing programs rpmbuild runs won't be able to read it.
 # So, we change permissions so that they can read it.  We'll set the
-# permissions back to 04111 in the %files section below.
+# permissions back to 04110 in the %files section below.
 chmod 755 $RPM_BUILD_ROOT%{_bindir}/staprun
 
 #install the useful stap-prep script
@@ -487,7 +489,7 @@ exit 0
 
 %files runtime
 %defattr(-,root,root)
-%attr(4111,root,root) %{_bindir}/staprun
+%attr(4110,root,stapusr) %{_bindir}/staprun
 %{_bindir}/stap-report
 %{_bindir}/stap-authorize-signing-cert
 %{_libexecdir}/%{name}/stapio
@@ -559,6 +561,10 @@ exit 0
 
 
 %changelog
+* Mon Nov 15 2010  Frank Ch. Eigler <fche@redhat.com> - 1.2-11
+- CVE-2010-4170
+- CVE-2010-4171
+
 * Tue Jun 29 2010  Frank Ch. Eigler <fche@redhat.com> - 1.2-9
 - buildprereq gcc 4.4.4-9 only
 
